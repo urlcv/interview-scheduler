@@ -1,0 +1,38 @@
+{
+    "name": "urlcv/interview-scheduler",
+    "description": "Meeting and interview time scheduler — share a booking link and let candidates or colleagues pick from your available slots. Confirmation emails sent to both parties.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["scheduling", "interview", "meeting", "booking", "calendar", "recruitment", "time-slots"],
+    "homepage": "https://urlcv.com/tools/interview-scheduler",
+    "authors": [
+        {
+            "name": "URLCV",
+            "homepage": "https://urlcv.com"
+        }
+    ],
+    "require": {
+        "php": "^8.1",
+        "illuminate/support": "^10.0 || ^11.0 || ^12.0",
+        "illuminate/mail": "^10.0 || ^11.0 || ^12.0",
+        "illuminate/routing": "^10.0 || ^11.0 || ^12.0",
+        "illuminate/http": "^10.0 || ^11.0 || ^12.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "URLCV\\InterviewScheduler\\": "src/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "URLCV\\InterviewScheduler\\Laravel\\InterviewSchedulerServiceProvider"
+            ]
+        }
+    },
+    "config": {
+        "optimize-autoloader": true,
+        "sort-packages": true
+    },
+    "minimum-stability": "stable"
+}
