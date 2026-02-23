@@ -700,10 +700,12 @@ function interviewScheduler(bookParam, editParam) {
 
         get timeSlots() {
             const step = parseInt(this.org.duration || 30, 10);
+            const startHour = 8;
+            const endHour = 23;
             return Array.from(
-                { length: Math.floor((19 - 8) * 60 / step) },
+                { length: Math.floor((endHour - startHour) * 60 / step) },
                 (_, i) => {
-                    const m   = 8 * 60 + i * step;
+                    const m   = startHour * 60 + i * step;
                     const h   = Math.floor(m / 60);
                     const min = m % 60;
                     return { key: `${this._p(h)}:${this._p(min)}`, label: `${this._p(h)}:${this._p(min)}`, h, min };
