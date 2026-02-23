@@ -155,6 +155,18 @@
                             :class="showWeekends ? 'bg-gray-700 text-white border-gray-700' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'">
                             Weekends
                         </button>
+                        {{-- Copy from previous week --}}
+                        <button type="button" @click="copyFromPrevWeek()" x-show="hasPrevWeekSlots"
+                            class="text-xs font-medium px-2.5 py-1 rounded-full border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
+                            title="Copy same weekday/time pattern from last week">
+                            Copy prev week
+                        </button>
+                        {{-- Copy to next week --}}
+                        <button type="button" @click="copyToNextWeek()" x-show="hasWeekSlots"
+                            class="text-xs font-medium px-2.5 py-1 rounded-full border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
+                            title="Copy this week's slots to next week">
+                            Copy to next week
+                        </button>
                         {{-- Clear this week --}}
                         <button type="button" @click="clearWeek()" x-show="hasWeekSlots"
                             class="text-xs font-medium text-red-500 hover:text-red-700 transition-colors">
@@ -778,6 +790,49 @@ function interviewScheduler(bookParam, editParam) {
         get hasWeekSlots() {
             const days = new Set(this.visibleDays.map(d => d.iso));
             return Object.keys(this.selectedSlots).some(k => days.has(k.split('T')[0]));
+        },
+
+        get hasPrevWeekSlots() {
+            const prevWeekDays = this.visibleDays.map(d => this._addDays(d.iso, -7));
+            return Object.keys(this.selectedSlots).some(k => prevWeekDays.includes(k.split('T')[0]));
+        },
+
+        _addDays(iso, days) {
+            const d = new Date(iso + 'T00:00');
+            d.setDate(d.getDate() + days);
+            return `${d.getFullYear()}-${this._p(d.getMonth() + 1)}-${this._p(d.getDate())}`;
+        },
+
+        copyFromPrevWeek() {
+            const added = {};
+            for (const day of this.visibleDays) {
+                const prevDate = this._addDays(day.iso, -7);
+                for (const slot of this.timeSlots) {
+                    const srcKey = `${prevDate}T${slot.key}`;
+                    if (this.selectedSlots[srcKey] && !this.cellIsPast(day, slot)) {
+                        added[`${day.iso}T${slot.key}`] = true;
+                    }
+                }
+            }
+            if (Object.keys(added).length > 0) {
+                this.selectedSlots = { ...this.selectedSlots, ...added };
+            }
+        },
+
+        copyToNextWeek() {
+            const added = {};
+            for (const day of this.visibleDays) {
+                const nextDate = this._addDays(day.iso, 7);
+                for (const slot of this.timeSlots) {
+                    const srcKey = `${day.iso}T${slot.key}`;
+                    if (this.selectedSlots[srcKey]) {
+                        added[`${nextDate}T${slot.key}`] = true;
+                    }
+                }
+            }
+            if (Object.keys(added).length > 0) {
+                this.selectedSlots = { ...this.selectedSlots, ...added };
+            }
         },
 
         clearWeek() {
