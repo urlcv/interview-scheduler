@@ -4,27 +4,17 @@
   Three modes driven by URL params:
 
   ORGANISER  (no params)   — weekly calendar grid, click/drag multi-select
-  EDIT       (?edit=B64)   — organiser form pre-filled from encoded payload
-  ATTENDEE   (?book=B64)   — slot picker shown in browser's local timezone
+  EDIT       (?edit=TOKEN) — organiser form pre-filled from DB (or legacy base64)
+  ATTENDEE   (?book=ID)    — slot picker shown in browser's local timezone
 
-  Booking payload (base64-encoded JSON):
-  {
-    "title":     "30-min Interview",
-    "organizer": "Jane Smith",
-    "email":     "jane@company.com",
-    "duration":  30,
-    "link":      "https://...",
-    "tz":        "Europe/London",
-    "slots":     ["2024-01-15T09:00:00.000Z", ...]   // UTC ISO-8601
-  }
+  New links use short IDs: ?book=abc123 (DB) or ?edit=xyz... (48-char token).
+  Legacy base64 ?book= / ?edit= still supported.
 
   selectedSlots is stored as a plain JS object (hash) for reliable Alpine reactivity:
     { "2024-01-15T09:00": true, ... }   ← local-time keys
   Every mutation replaces the object reference (spread) so Alpine re-renders bindings.
 
-  Server routes registered by InterviewSchedulerServiceProvider:
-    POST /tools/interview-scheduler/book        → emails + .ics
-    POST /tools/interview-scheduler/email-edit  → emails organiser their ?edit= link
+  Routes: create, update, schedule/{id}, schedule/edit/{token}, book, email-edit
 --}}
 @php
     $bookParam = request()->query('book', '');
@@ -45,6 +35,18 @@
     <template x-if="mode === 'organiser'">
         <div class="space-y-6">
 
+            <template x-if="initLoading && isEditMode">
+                <div class="rounded-xl bg-gray-50 border border-gray-200 p-8 text-center text-gray-500">
+                    <svg class="w-8 h-8 animate-spin mx-auto mb-2 text-gray-400" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                    </svg>
+                    Loading your schedule…
+                </div>
+            </template>
+
+            <template x-if="!initLoading || !isEditMode">
+            <div class="space-y-6">
             {{-- Info callout --}}
             <div class="rounded-xl bg-blue-50 border border-blue-200 p-4 text-sm text-blue-800">
                 <p class="font-semibold mb-1">How to schedule an interview or meeting</p>
@@ -52,7 +54,7 @@
                     <li>Fill in your details, then <strong>click or drag on the calendar grid</strong> to mark when you're available.</li>
                     <li>Click <strong>Generate booking link</strong> — a shareable URL is created instantly, no account needed.</li>
                     <li>Paste the link into your email. Your candidate picks a slot and <strong>both parties receive a calendar invite automatically</strong>.</li>
-                    <li>Use <strong>Email me my edit link</strong> to save a link that re-opens this form pre-filled whenever you want to change your slots.</li>
+                    <li>Use <strong>Email me my edit link</strong> to save a link that lets you change your slots anytime—your booking link stays the same and updates automatically.</li>
                 </ol>
             </div>
 
@@ -62,7 +64,8 @@
                     <svg class="w-4 h-4 flex-shrink-0 mt-0.5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
                     </svg>
-                    <span>Your scheduling link has been loaded for editing. Adjust your slots on the calendar, then click <strong>Generate booking link</strong> to create a fresh URL.</span>
+                    <span x-show="editToken">Your scheduling link has been loaded for editing. Adjust your slots, then click <strong>Save changes</strong> — your booking link stays the same and updates automatically.</span>
+                    <span x-show="!editToken">Your scheduling link has been loaded for editing. Adjust your slots on the calendar, then click <strong>Generate booking link</strong> to create a fresh URL.</span>
                 </div>
             </template>
 
@@ -263,16 +266,22 @@
 
             {{-- ── Generate button ───────────────────────────────────────────── --}}
             <div>
-                <button type="button" @click="generateLink()" :disabled="!isOrgFormValid"
+                <button type="button" @click="generateLink()" :disabled="!isOrgFormValid || generatingLink"
                     class="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg x-show="generatingLink" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                    </svg>
+                    <svg x-show="!generatingLink" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
                     </svg>
-                    Generate booking link
+                    <span x-text="editToken ? 'Save changes' : 'Generate booking link'"></span>
                 </button>
                 <p x-show="!isOrgFormValid" class="mt-2 text-xs text-gray-400">
                     Complete your name, email, meeting title, and select at least one available slot on the calendar above.
                 </p>
+                <p x-show="generateError" class="mt-2 text-xs text-red-600" x-text="generateError"></p>
+                <p x-show="generateSuccess" class="mt-2 text-xs text-green-600">Changes saved! Your booking link now shows the updated slots.</p>
             </div>
 
             {{-- ── Generated link + email edit ──────────────────────────────── --}}
@@ -348,6 +357,8 @@
                 </div>
             </template>
 
+            </div>
+            </template>
         </div>
     </template>
 
@@ -357,7 +368,17 @@
     <template x-if="mode === 'attendee'">
         <div class="space-y-6">
 
-            <template x-if="initError">
+            <template x-if="initLoading">
+                <div class="rounded-xl bg-gray-50 border border-gray-200 p-8 text-center text-gray-500">
+                    <svg class="w-8 h-8 animate-spin mx-auto mb-2 text-gray-400" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                    </svg>
+                    Loading schedule…
+                </div>
+            </template>
+
+            <template x-if="initError && !initLoading">
                 <div class="rounded-xl bg-red-50 border border-red-200 p-5 text-sm text-red-800">
                     <p class="font-semibold mb-1">Invalid booking link</p>
                     <p x-text="initError"></p>
@@ -367,7 +388,7 @@
                 </div>
             </template>
 
-            <template x-if="bookingData && !initError">
+            <template x-if="bookingData && !initError && !initLoading">
                 <div class="space-y-6">
 
                     {{-- Meeting header --}}
@@ -570,6 +591,9 @@ function interviewScheduler(bookParam, editParam) {
 
         // ── Generate / copy ───────────────────────────────────────────────────
         generatedLink:     '',
+        generatingLink:    false,
+        generateError:     null,
+        generateSuccess:   false,
         bookingLinkCopied: false,
 
         // ── Edit-link email ───────────────────────────────────────────────────
@@ -580,6 +604,7 @@ function interviewScheduler(bookParam, editParam) {
 
         // ── Attendee ──────────────────────────────────────────────────────────
         bookParam,
+        bookId:          null,   // Short ID when loaded from DB
         bookingData:     null,
         selectedSlotIdx: null,
         attendeeName:    '',
@@ -588,14 +613,18 @@ function interviewScheduler(bookParam, editParam) {
         submitted:       false,
         errorMsg:        null,
         initError:       null,
+        initLoading:     false,
         detectedTz:      '',
         detectedTzAbbr:  '',
         tzShort:         '',
 
+        // ── DB-backed state (create/update/edit) ───────────────────────────────
+        editToken:       null,   // Short token for edit/update; set after create or when ?edit=shortId
+
         // ────────────────────────────────────────────────────────────────────
         // Lifecycle
         // ────────────────────────────────────────────────────────────────────
-        init() {
+        async init() {
             this.detectedTz     = Intl.DateTimeFormat().resolvedOptions().timeZone;
             this.detectedTzAbbr = new Date().toLocaleTimeString('en-US', { timeZoneName: 'short' })
                                             .split(' ').pop();
@@ -616,27 +645,60 @@ function interviewScheduler(bookParam, editParam) {
             // Clear all selected slots when duration changes — keys are no longer valid
             this.$watch('org.duration', () => { this.selectedSlots = {}; });
 
-            if (editParam) this._loadEditParam(editParam);
-
-            if (bookParam) {
-                try {
-                    this.bookingData = JSON.parse(atob(bookParam));
-                } catch (e) {
-                    this.initError = 'This booking link appears to be invalid or corrupted. Please ask the organiser to send a new link.';
-                }
-            }
+            if (editParam) await this._loadEditParam(editParam);
+            if (bookParam) await this._loadBookParam(bookParam);
         },
 
-        _loadEditParam(param) {
+        _isShortBookId(s) {
+            return typeof s === 'string' && /^[a-z0-9]{8,16}$/.test(s);
+        },
+
+        _isShortEditToken(s) {
+            return typeof s === 'string' && /^[a-zA-Z0-9]{32,64}$/.test(s);
+        },
+
+        async _loadEditParam(param) {
+            if (this._isShortEditToken(param)) {
+                this.initLoading = true;
+                try {
+                    const r = await fetch('/tools/interview-scheduler/schedule/edit/' + encodeURIComponent(param));
+                    if (!r.ok) {
+                        this.initError = 'This edit link is invalid or has expired.';
+                        return;
+                    }
+                    const data = await r.json();
+                    this.editToken = param;
+                    this.org.title      = data.title     || '';
+                    this.org.name       = data.organizer || '';
+                    this.org.email      = data.email     || '';
+                    this.org.duration   = String(data.duration || 30);
+                    this.org.videoLink  = data.link      || '';
+                    this.editEmailInput = data.email     || '';
+                    if (Array.isArray(data.slots) && data.slots.length) {
+                        const hash = {};
+                        data.slots.forEach(iso => {
+                            hash[this._dateToLocalKey(new Date(iso))] = true;
+                        });
+                        this.selectedSlots = hash;
+                        this.weekStartISO  = this._getMondayISO(new Date(data.slots[0]));
+                    }
+                    this.generatedLink = window.location.origin + '/tools/interview-scheduler?book=' + (data.book_id || param);
+                } catch (e) {
+                    this.initError = 'Could not load your schedule. Please try again.';
+                } finally {
+                    this.initLoading = false;
+                }
+                return;
+            }
+            // Legacy base64
             try {
                 const data = JSON.parse(atob(param));
-                this.org.title     = data.title     || '';
-                this.org.name      = data.organizer || '';
-                this.org.email     = data.email     || '';
-                this.org.duration  = String(data.duration || 30);
-                this.org.videoLink = data.link      || '';
-                this.editEmailInput = data.email    || '';
-
+                this.org.title      = data.title     || '';
+                this.org.name       = data.organizer || '';
+                this.org.email      = data.email     || '';
+                this.org.duration   = String(data.duration || 30);
+                this.org.videoLink  = data.link      || '';
+                this.editEmailInput = data.email     || '';
                 if (Array.isArray(data.slots) && data.slots.length) {
                     const hash = {};
                     data.slots.forEach(iso => {
@@ -645,7 +707,33 @@ function interviewScheduler(bookParam, editParam) {
                     this.selectedSlots = hash;
                     this.weekStartISO  = this._getMondayISO(new Date(data.slots[0]));
                 }
-            } catch (e) { /* silently ignore — form stays blank */ }
+            } catch (e) { /* silently ignore */ }
+        },
+
+        async _loadBookParam(param) {
+            if (this._isShortBookId(param)) {
+                this.initLoading = true;
+                try {
+                    const r = await fetch('/tools/interview-scheduler/schedule/' + encodeURIComponent(param));
+                    if (!r.ok) {
+                        this.initError = 'This booking link is invalid or no longer available. Please ask the organiser to send a new link.';
+                        return;
+                    }
+                    this.bookingData = await r.json();
+                    this.bookId = param;
+                } catch (e) {
+                    this.initError = 'Could not load the schedule. Please try again.';
+                } finally {
+                    this.initLoading = false;
+                }
+                return;
+            }
+            // Legacy base64
+            try {
+                this.bookingData = JSON.parse(atob(param));
+            } catch (e) {
+                this.initError = 'This booking link appears to be invalid or corrupted. Please ask the organiser to send a new link.';
+            }
         },
 
         // ────────────────────────────────────────────────────────────────────
@@ -852,19 +940,58 @@ function interviewScheduler(bookParam, editParam) {
                 && this.slotCount > 0;
         },
 
-        generateLink() {
+        async generateLink() {
+            if (!this.isOrgFormValid || this.generatingLink) return;
+            this.generatingLink = true;
+            this.generateError = null;
+            this.generateSuccess = false;
             const tz       = Intl.DateTimeFormat().resolvedOptions().timeZone;
             const isoSlots = Object.keys(this.selectedSlots).sort().map(k => new Date(k).toISOString());
-            const encoded  = btoa(JSON.stringify({
-                title:    this.org.title.trim(),
+            const payload = {
+                title:     this.org.title.trim(),
                 organizer: this.org.name.trim(),
-                email:    this.org.email.trim(),
-                duration: parseInt(this.org.duration, 10),
-                link:     this.org.videoLink.trim(),
-                tz, slots: isoSlots,
-            }));
-            this.generatedLink = window.location.origin + '/tools/interview-scheduler?book=' + encoded;
-            if (!this.editEmailInput && this.org.email) this.editEmailInput = this.org.email;
+                email:     this.org.email.trim(),
+                duration:  parseInt(this.org.duration, 10),
+                link:      this.org.videoLink.trim(),
+                tz,
+                slots:     isoSlots,
+            };
+
+            try {
+            if (this.editToken) {
+                const r = await fetch('/tools/interview-scheduler/update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json',
+                        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ?? '' },
+                    body: JSON.stringify({ edit_token: this.editToken, ...payload }),
+                });
+                const json = await r.json().catch(() => ({}));
+                if (json.success) {
+                    this.generatedLink = json.booking_url;
+                    this.generateSuccess = true;
+                    setTimeout(() => { this.generateSuccess = false; }, 5000);
+                } else {
+                    this.generateError = json.message ?? (r.ok ? 'Could not save changes.' : 'Could not connect. Please try again.');
+                }
+            } else {
+            const r = await fetch('/tools/interview-scheduler/create', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json',
+                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ?? '' },
+                body: JSON.stringify(payload),
+            });
+            const json = await r.json().catch(() => ({}));
+            if (json.success) {
+                this.generatedLink   = json.booking_url;
+                this.editToken       = json.edit_token;
+                if (!this.editEmailInput && this.org.email) this.editEmailInput = this.org.email;
+            } else {
+                this.generateError = json.message ?? (r.ok ? 'Could not create link.' : 'Could not connect. Please try again.');
+            }
+            }
+            } catch (e) {
+                this.generateError = 'Something went wrong. Please try again.';
+            } finally { this.generatingLink = false; }
         },
 
         copyBookingLink() {
@@ -882,20 +1009,25 @@ function interviewScheduler(bookParam, editParam) {
 
         async sendEditLink() {
             if (!this.editEmailInput.trim() || this.sendingEditLink) return;
-            const tz       = Intl.DateTimeFormat().resolvedOptions().timeZone;
-            const isoSlots = Object.keys(this.selectedSlots).sort().map(k => new Date(k).toISOString());
-            const encoded  = btoa(JSON.stringify({
-                title: this.org.title.trim(), organizer: this.org.name.trim(),
-                email: this.org.email.trim(), duration: parseInt(this.org.duration, 10),
-                link: this.org.videoLink.trim(), tz, slots: isoSlots,
-            }));
             this.sendingEditLink = true; this.editLinkError = null;
             try {
-                const r    = await fetch('/tools/interview-scheduler/email-edit', {
+                const body = { email: this.editEmailInput.trim() };
+                if (this.editToken) {
+                    body.edit_token = this.editToken;
+                } else {
+                    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                    const isoSlots = Object.keys(this.selectedSlots).sort().map(k => new Date(k).toISOString());
+                    body.booking_data = btoa(JSON.stringify({
+                        title: this.org.title.trim(), organizer: this.org.name.trim(),
+                        email: this.org.email.trim(), duration: parseInt(this.org.duration, 10),
+                        link: this.org.videoLink.trim(), tz, slots: isoSlots,
+                    }));
+                }
+                const r = await fetch('/tools/interview-scheduler/email-edit', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'Accept': 'application/json',
                         'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ?? '' },
-                    body: JSON.stringify({ booking_data: encoded, email: this.editEmailInput.trim() }),
+                    body: JSON.stringify(body),
                 });
                 const json = await r.json();
                 json.success ? (this.editLinkSent = true) : (this.editLinkError = json.message ?? 'Could not send email.');
@@ -942,14 +1074,21 @@ function interviewScheduler(bookParam, editParam) {
             if (!this.isBookingValid || this.submitting) return;
             this.submitting = true; this.errorMsg = null;
             try {
+                const body = {
+                    slot_index: this.selectedSlotIdx,
+                    attendee_name: this.attendeeName.trim(),
+                    attendee_email: this.attendeeEmail.trim(),
+                };
+                if (this.bookId) {
+                    body.book_id = this.bookId;
+                } else {
+                    body.booking_data = this.bookParam;
+                }
                 const r = await fetch('/tools/interview-scheduler/book', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'Accept': 'application/json',
                         'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ?? '' },
-                    body: JSON.stringify({
-                        booking_data: this.bookParam, slot_index: this.selectedSlotIdx,
-                        attendee_name: this.attendeeName.trim(), attendee_email: this.attendeeEmail.trim(),
-                    }),
+                    body: JSON.stringify(body),
                 });
                 const json = await r.json();
                 if (json.success) { this.submitted = true; this.$el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }

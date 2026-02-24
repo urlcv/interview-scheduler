@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace URLCV\InterviewScheduler\Laravel;
 
+use App\Models\InterviewSchedule;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Route;
@@ -15,10 +16,14 @@ use URLCV\InterviewScheduler\Mail\OrganizerNotification;
 /**
  * Laravel service provider for the Meeting & Interview Scheduler package.
  *
- * Loads Blade views and registers two API routes:
+ * Loads Blade views and registers routes:
  *
- *  POST /tools/interview-scheduler/book        — process a booking, send emails
- *  POST /tools/interview-scheduler/email-edit  — email the organiser their edit link
+ *  POST /tools/interview-scheduler/create             — create schedule, return book_id + edit_token
+ *  POST /tools/interview-scheduler/update             — update schedule by edit_token
+ *  GET  /tools/interview-scheduler/schedule/{book_id} — fetch schedule for attendee
+ *  GET  /tools/interview-scheduler/schedule/edit/{edit_token} — fetch schedule for organiser edit
+ *  POST /tools/interview-scheduler/book               — process booking (book_id or legacy booking_data)
+ *  POST /tools/interview-scheduler/email-edit         — email edit link (edit_token or legacy booking_data)
  */
 class InterviewSchedulerServiceProvider extends ServiceProvider
 {
@@ -26,8 +31,136 @@ class InterviewSchedulerServiceProvider extends ServiceProvider
     {
         $this->loadViewsFrom(__DIR__ . '/../../resources/views', 'interview-scheduler');
 
+        $this->registerScheduleFetchRoutes();
+        $this->registerCreateRoute();
+        $this->registerUpdateRoute();
         $this->registerBookingRoute();
         $this->registerEmailEditRoute();
+    }
+
+    // ── Schedule fetch (for Alpine.js) ────────────────────────────────────────
+
+    private function registerScheduleFetchRoutes(): void
+    {
+        Route::get(
+            '/tools/interview-scheduler/schedule/{book_id}',
+            function (string $book_id) {
+                $schedule = InterviewSchedule::where('book_id', $book_id)->first();
+                if (! $schedule) {
+                    return response()->json(['error' => 'Schedule not found'], 404);
+                }
+                return response()->json($schedule->toBookingPayload());
+            }
+        )
+        ->middleware(['web'])
+        ->name('tools.interview-scheduler.schedule');
+
+        Route::get(
+            '/tools/interview-scheduler/schedule/edit/{edit_token}',
+            function (string $edit_token) {
+                $schedule = InterviewSchedule::where('edit_token', $edit_token)->first();
+                if (! $schedule) {
+                    return response()->json(['error' => 'Schedule not found'], 404);
+                }
+                return response()->json(array_merge(
+                    $schedule->toBookingPayload(),
+                    ['book_id' => $schedule->book_id],
+                ));
+            }
+        )
+        ->middleware(['web'])
+        ->name('tools.interview-scheduler.schedule.edit');
+    }
+
+    // ── Create ────────────────────────────────────────────────────────────────
+
+    private function registerCreateRoute(): void
+    {
+        Route::post(
+            '/tools/interview-scheduler/create',
+            function (Request $request) {
+                $validated = $request->validate([
+                    'title'     => ['required', 'string', 'max:255'],
+                    'organizer' => ['required', 'string', 'max:255'],
+                    'email'     => ['required', 'email', 'max:255'],
+                    'duration'  => ['required', 'integer', 'in:15,30,45,60,90'],
+                    'link'      => ['nullable', 'string', 'max:2048'],
+                    'tz'        => ['required', 'string', 'max:64'],
+                    'slots'     => ['required', 'array'],
+                    'slots.*'   => ['required', 'string', 'max:64'],
+                ]);
+
+                $schedule = InterviewSchedule::create([
+                    'book_id'    => InterviewSchedule::generateBookId(),
+                    'edit_token' => InterviewSchedule::generateEditToken(),
+                    'title'      => $validated['title'],
+                    'organizer'  => $validated['organizer'],
+                    'email'      => $validated['email'],
+                    'duration'   => (int) $validated['duration'],
+                    'video_link' => $validated['link'] ?? null,
+                    'tz'         => $validated['tz'],
+                    'slots'      => $validated['slots'],
+                ]);
+
+                return response()->json([
+                    'success'     => true,
+                    'book_id'     => $schedule->book_id,
+                    'edit_token'  => $schedule->edit_token,
+                    'booking_url' => url('/tools/interview-scheduler?book=' . $schedule->book_id),
+                    'edit_url'    => url('/tools/interview-scheduler?edit=' . $schedule->edit_token),
+                ]);
+            }
+        )
+        ->middleware(['web', 'throttle:20,1'])
+        ->name('tools.interview-scheduler.create');
+    }
+
+    // ── Update ────────────────────────────────────────────────────────────────
+
+    private function registerUpdateRoute(): void
+    {
+        Route::post(
+            '/tools/interview-scheduler/update',
+            function (Request $request) {
+                $validated = $request->validate([
+                    'edit_token' => ['required', 'string', 'max:64'],
+                    'title'      => ['required', 'string', 'max:255'],
+                    'organizer'  => ['required', 'string', 'max:255'],
+                    'email'      => ['required', 'email', 'max:255'],
+                    'duration'   => ['required', 'integer', 'in:15,30,45,60,90'],
+                    'link'       => ['nullable', 'string', 'max:2048'],
+                    'tz'         => ['required', 'string', 'max:64'],
+                    'slots'      => ['required', 'array'],
+                    'slots.*'    => ['required', 'string', 'max:64'],
+                ]);
+
+                $schedule = InterviewSchedule::where('edit_token', $validated['edit_token'])->first();
+                if (! $schedule) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Invalid edit link.',
+                    ], 404);
+                }
+
+                $schedule->update([
+                    'title'      => $validated['title'],
+                    'organizer'  => $validated['organizer'],
+                    'email'      => $validated['email'],
+                    'duration'   => (int) $validated['duration'],
+                    'video_link' => $validated['link'] ?? null,
+                    'tz'         => $validated['tz'],
+                    'slots'      => $validated['slots'],
+                ]);
+
+                return response()->json([
+                    'success'     => true,
+                    'book_id'     => $schedule->book_id,
+                    'booking_url' => url('/tools/interview-scheduler?book=' . $schedule->book_id),
+                ]);
+            }
+        )
+        ->middleware(['web', 'throttle:20,1'])
+        ->name('tools.interview-scheduler.update');
     }
 
     // ── Booking endpoint ──────────────────────────────────────────────────────
@@ -38,44 +171,65 @@ class InterviewSchedulerServiceProvider extends ServiceProvider
             '/tools/interview-scheduler/book',
             function (Request $request) {
                 $validated = $request->validate([
-                    'booking_data'   => ['required', 'string', 'max:8192'],
-                    'slot_index'     => ['required', 'integer', 'min:0', 'max:99'],
+                    'slot_index'     => ['required', 'integer', 'min:0', 'max:999'],
                     'attendee_name'  => ['required', 'string', 'max:255'],
                     'attendee_email' => ['required', 'email', 'max:255'],
+                    'book_id'        => ['nullable', 'string', 'max:16'],
+                    'booking_data'   => ['nullable', 'string', 'max:8192'],
                 ]);
 
-                // Decode the booking payload
-                try {
-                    $data = json_decode(
-                        base64_decode($validated['booking_data'], strict: true),
-                        associative: true,
-                        flags: JSON_THROW_ON_ERROR,
-                    );
-                } catch (\Throwable) {
+                $bookingData = $validated['booking_data'] ?? null;
+                $bookId      = $validated['book_id'] ?? null;
+                $slotIndex   = (int) $validated['slot_index'];
+                $attendeeName = $validated['attendee_name'];
+                $attendeeEmail = $validated['attendee_email'];
+
+                $data = null;
+
+                if ($bookId && is_string($bookId) && strlen($bookId) <= 16) {
+                    $schedule = InterviewSchedule::where('book_id', $bookId)->first();
+                    if ($schedule) {
+                        $data = $schedule->toBookingPayload();
+                    }
+                }
+
+                if (! $data && $bookingData) {
+                    try {
+                        $decoded = json_decode(
+                            base64_decode($bookingData, true),
+                            true,
+                            512,
+                            JSON_THROW_ON_ERROR,
+                        );
+                        if (is_array($decoded)) {
+                            $data = $decoded;
+                        }
+                    } catch (\Throwable) {
+                        // Legacy decode failed
+                    }
+                }
+
+                if (! $data) {
                     return response()->json([
                         'success' => false,
-                        'message' => 'Invalid booking link — the data could not be decoded.',
+                        'message' => 'Invalid booking link.',
                     ], 422);
                 }
 
                 $slots = $data['slots'] ?? [];
-                $idx   = (int) $validated['slot_index'];
-
-                if (! isset($slots[$idx])) {
+                if (! isset($slots[$slotIndex])) {
                     return response()->json([
                         'success' => false,
                         'message' => 'The selected time slot is no longer available.',
                     ], 422);
                 }
 
-                $slotIso        = (string) $slots[$idx];
+                $slotIso        = (string) $slots[$slotIndex];
                 $organizerName  = (string) ($data['organizer'] ?? 'The organiser');
                 $organizerEmail = (string) ($data['email'] ?? '');
                 $eventTitle     = (string) ($data['title'] ?? 'Meeting');
-                $duration       = (int)    ($data['duration'] ?? 30);
+                $duration       = (int) ($data['duration'] ?? 30);
                 $videoLink      = (string) ($data['link'] ?? '');
-                $attendeeName   = $validated['attendee_name'];
-                $attendeeEmail  = $validated['attendee_email'];
 
                 if (! filter_var($organizerEmail, FILTER_VALIDATE_EMAIL)) {
                     return response()->json([
@@ -134,41 +288,55 @@ class InterviewSchedulerServiceProvider extends ServiceProvider
 
     // ── Email-edit endpoint ───────────────────────────────────────────────────
 
-    /**
-     * Sends the organiser their personal edit link so they can amend their
-     * available slots without needing an account.
-     *
-     * The edit link is simply the same booking payload but with ?edit= instead
-     * of ?book=, which causes the view to pre-fill the organiser form.
-     */
     private function registerEmailEditRoute(): void
     {
         Route::post(
             '/tools/interview-scheduler/email-edit',
             function (Request $request) {
                 $validated = $request->validate([
-                    'booking_data' => ['required', 'string', 'max:8192'],
-                    'email'        => ['required', 'email', 'max:255'],
+                    'email' => ['required', 'email', 'max:255'],
                 ]);
 
-                try {
-                    $data = json_decode(
-                        base64_decode($validated['booking_data'], strict: true),
-                        associative: true,
-                        flags: JSON_THROW_ON_ERROR,
-                    );
-                } catch (\Throwable) {
-                    return response()->json([
-                        'success' => false,
-                        'message' => 'Invalid booking data.',
-                    ], 422);
+                $editToken   = $request->input('edit_token');
+                $bookingData = $request->input('booking_data');
+
+                $editUrl = null;
+                $organizerName = 'there';
+                $eventTitle = 'your meeting';
+
+                if ($editToken && is_string($editToken) && strlen($editToken) <= 64) {
+                    $schedule = InterviewSchedule::where('edit_token', $editToken)->first();
+                    if ($schedule) {
+                        $editUrl       = url('/tools/interview-scheduler?edit=' . $editToken);
+                        $organizerName = $schedule->organizer;
+                        $eventTitle    = $schedule->title;
+                    }
                 }
 
-                $organizerName = (string) ($data['organizer'] ?? 'there');
-                $eventTitle    = (string) ($data['title'] ?? 'your meeting');
+                if (! $editUrl && $bookingData) {
+                    try {
+                        $data = json_decode(
+                            base64_decode($bookingData, true),
+                            true,
+                            512,
+                            JSON_THROW_ON_ERROR,
+                        );
+                        if (is_array($data)) {
+                            $organizerName = (string) ($data['organizer'] ?? 'there');
+                            $eventTitle    = (string) ($data['title'] ?? 'your meeting');
+                            $editUrl       = url('/tools/interview-scheduler') . '?edit=' . $bookingData;
+                        }
+                    } catch (\Throwable) {
+                        // Legacy decode failed
+                    }
+                }
 
-                // Build the edit URL — same payload, ?edit= param pre-fills the form
-                $editUrl = url('/tools/interview-scheduler') . '?edit=' . $validated['booking_data'];
+                if (! $editUrl) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Invalid edit link.',
+                    ], 422);
+                }
 
                 try {
                     Mail::to($validated['email'], $organizerName)->send(

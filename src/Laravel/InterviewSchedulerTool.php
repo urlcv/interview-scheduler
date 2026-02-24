@@ -51,7 +51,7 @@ Stop the back-and-forth email chains. Create a personalised scheduling link in s
 - **Calendar invite (.ics)** — one-click "Add to Calendar" for Google Calendar, Outlook, Apple Calendar
 - **Video call link** — include a Teams / Zoom / Google Meet link and it appears in the invite
 - **Configurable duration** — 15, 30, 45, 60, or 90-minute slots
-- **Fully private** — booking data lives in the link; nothing is stored on URLCV servers
+- **Editable without changing the link** — your slots are stored server-side, so you can update availability anytime; the same booking link always shows your latest slots
 
 ### Use cases for recruiters
 
