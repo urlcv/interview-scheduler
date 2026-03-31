@@ -295,16 +295,37 @@ class InterviewSchedulerServiceProvider extends ServiceProvider
             function (Request $request) {
                 $validated = $request->validate([
                     'email' => ['required', 'email', 'max:255'],
+                    'book_id' => ['nullable', 'string', 'max:32'],
                 ]);
 
                 $editToken   = $request->input('edit_token');
                 $bookingData = $request->input('booking_data');
+                $bookId      = $request->input('book_id');
 
                 $editUrl = null;
                 $organizerName = 'there';
                 $eventTitle = 'your meeting';
+                $sendToEmail = $validated['email'];
 
-                if ($editToken && is_string($editToken) && strlen($editToken) <= 64) {
+                // Recovery: allow organisers who only have the public booking link (?book=...)
+                // to request their edit link by entering the organiser email that was used
+                // to create the schedule. We always send the link to the stored organiser email.
+                if ($bookId && is_string($bookId) && preg_match('/^[a-z0-9]{8,16}$/', $bookId) === 1) {
+                    $schedule = InterviewSchedule::where('book_id', $bookId)->first();
+                    if ($schedule && strcasecmp($validated['email'], (string) $schedule->email) === 0) {
+                        $editUrl       = url('/tools/interview-scheduler?edit=' . $schedule->edit_token);
+                        $organizerName = $schedule->organizer;
+                        $eventTitle    = $schedule->title;
+                        $sendToEmail   = (string) $schedule->email;
+                    } else {
+                        return response()->json([
+                            'success' => false,
+                            'message' => 'We could not verify that organiser email for this booking link.',
+                        ], 422);
+                    }
+                }
+
+                if (! $editUrl && $editToken && is_string($editToken) && strlen($editToken) <= 64) {
                     $schedule = InterviewSchedule::where('edit_token', $editToken)->first();
                     if ($schedule) {
                         $editUrl       = url('/tools/interview-scheduler?edit=' . $editToken);
@@ -339,7 +360,7 @@ class InterviewSchedulerServiceProvider extends ServiceProvider
                 }
 
                 try {
-                    Mail::to($validated['email'], $organizerName)->send(
+                    Mail::to($sendToEmail, $organizerName)->send(
                         new OrganizerEditLink(
                             organizerName: $organizerName,
                             editUrl:       $editUrl,
@@ -349,7 +370,7 @@ class InterviewSchedulerServiceProvider extends ServiceProvider
                 } catch (\Throwable $e) {
                     \Log::error('[InterviewScheduler] Edit link email failed', [
                         'error' => $e->getMessage(),
-                        'email' => $validated['email'],
+                        'email' => $sendToEmail,
                     ]);
 
                     return response()->json([

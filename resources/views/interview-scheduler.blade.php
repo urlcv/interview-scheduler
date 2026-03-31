@@ -558,7 +558,54 @@
 
     {{-- Attendee footer --}}
     <template x-if="mode === 'attendee'">
-        <div class="pt-2 border-t border-gray-100">
+        <div class="pt-4 border-t border-gray-100 space-y-4">
+
+            {{-- Organizer recovery --}}
+            <template x-if="bookId">
+                <div class="bg-gray-50 border border-gray-200 rounded-xl p-5 space-y-3">
+                    <div>
+                        <p class="text-sm font-semibold text-gray-800">Organizer?</p>
+                        <p class="text-xs text-gray-500 mt-0.5">
+                            Lost your edit link? Enter the organiser email used to create this booking link and we'll email your private edit link.
+                        </p>
+                    </div>
+
+                    <template x-if="!recoverEditLinkSent">
+                        <div class="flex flex-wrap items-end gap-3">
+                            <div class="flex-1 min-w-56">
+                                <label class="block text-xs font-medium text-gray-600 mb-1">Organiser email address</label>
+                                <input type="email" x-model="recoverEditEmailInput" placeholder="you@company.com" maxlength="255"
+                                    class="block w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 focus:border-transparent">
+                            </div>
+                            <button type="button" @click="sendRecoverEditLink()" :disabled="!recoverEditEmailInput.trim() || sendingRecoverEditLink"
+                                class="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white bg-gray-700 hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex-shrink-0">
+                                <svg x-show="sendingRecoverEditLink" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                                </svg>
+                                <svg x-show="!sendingRecoverEditLink" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+                                </svg>
+                                <span x-text="sendingRecoverEditLink ? 'Sending…' : 'Email me my edit link'"></span>
+                            </button>
+                        </div>
+                    </template>
+
+                    <template x-if="recoverEditLinkSent">
+                        <div class="flex items-center gap-2 text-sm text-green-700">
+                            <svg class="w-4 h-4 text-green-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                            </svg>
+                            Edit link sent! Check your inbox to save it for later.
+                        </div>
+                    </template>
+
+                    <template x-if="recoverEditLinkError">
+                        <p class="text-xs text-red-600" x-text="recoverEditLinkError"></p>
+                    </template>
+                </div>
+            </template>
+
             <a href="/tools/interview-scheduler" class="text-xs text-gray-400 hover:text-primary-600 transition-colors">
                 Need to schedule your own meetings? <span class="underline">Create a free booking link →</span>
             </a>
@@ -601,6 +648,12 @@ function interviewScheduler(bookParam, editParam) {
         sendingEditLink: false,
         editLinkSent:    false,
         editLinkError:   null,
+
+        // ── Recover edit link (attendee footer) ───────────────────────────────
+        recoverEditEmailInput:   '',
+        sendingRecoverEditLink:  false,
+        recoverEditLinkSent:     false,
+        recoverEditLinkError:    null,
 
         // ── Attendee ──────────────────────────────────────────────────────────
         bookParam,
@@ -1033,6 +1086,33 @@ function interviewScheduler(bookParam, editParam) {
                 json.success ? (this.editLinkSent = true) : (this.editLinkError = json.message ?? 'Could not send email.');
             } catch { this.editLinkError = 'Network error — please try again.'; }
             finally  { this.sendingEditLink = false; }
+        },
+
+        async sendRecoverEditLink() {
+            if (!this.bookId || !this.recoverEditEmailInput.trim() || this.sendingRecoverEditLink) return;
+            this.sendingRecoverEditLink = true;
+            this.recoverEditLinkError = null;
+            try {
+                const r = await fetch('/tools/interview-scheduler/email-edit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json',
+                        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ?? '' },
+                    body: JSON.stringify({
+                        email: this.recoverEditEmailInput.trim(),
+                        book_id: this.bookId,
+                    }),
+                });
+                const json = await r.json().catch(() => ({}));
+                if (json.success) {
+                    this.recoverEditLinkSent = true;
+                } else {
+                    this.recoverEditLinkError = json.message ?? (r.ok ? 'Could not send email.' : 'Could not connect. Please try again.');
+                }
+            } catch {
+                this.recoverEditLinkError = 'Network error — please try again.';
+            } finally {
+                this.sendingRecoverEditLink = false;
+            }
         },
 
         // ────────────────────────────────────────────────────────────────────
