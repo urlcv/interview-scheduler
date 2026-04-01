@@ -21,6 +21,7 @@ class OrganizerNotification extends Mailable
         public readonly int    $duration,
         public readonly string $slotIso,
         public readonly string $videoLink,
+        public readonly string $organizerTz = 'UTC',
     ) {}
 
     public function envelope(): Envelope
@@ -44,10 +45,12 @@ class OrganizerNotification extends Mailable
 
     private function buildHtml(): string
     {
-        $start     = new \DateTimeImmutable($this->slotIso);
+        $tz        = new \DateTimeZone($this->organizerTz ?: 'UTC');
+        $start     = (new \DateTimeImmutable($this->slotIso, new \DateTimeZone('UTC')))->setTimezone($tz);
         $end       = $start->modify("+{$this->duration} minutes");
-        $formatted = $start->format('l, j F Y \a\t g:i A') . ' UTC';
-        $endFmt    = $end->format('g:i A') . ' UTC';
+        $tzAbbr    = $start->format('T');
+        $formatted = $start->format('l, j F Y \a\t g:i A') . ' ' . $tzAbbr;
+        $endFmt    = $end->format('g:i A') . ' ' . $tzAbbr;
         $videoRow  = $this->videoLink
             ? '<tr style="border-top:1px solid #e5e7eb;"><td style="padding:12px 16px;color:#6b7280;font-size:14px;width:130px;">Video link</td><td style="padding:12px 16px;font-size:14px;color:#111827;"><a href="' . htmlspecialchars($this->videoLink) . '" style="color:#0284c7;">' . htmlspecialchars($this->videoLink) . '</a></td></tr>'
             : '';

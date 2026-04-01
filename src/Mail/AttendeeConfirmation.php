@@ -24,6 +24,7 @@ class AttendeeConfirmation extends Mailable
         public readonly int    $duration,
         public readonly string $slotIso,     // UTC ISO-8601 start time
         public readonly string $videoLink,
+        public readonly string $organizerTz = 'UTC',
     ) {}
 
     public function envelope(): Envelope
@@ -46,16 +47,18 @@ class AttendeeConfirmation extends Mailable
             Attachment::fromData(
                 fn () => $this->buildIcs(),
                 'invite.ics',
-            )->withMime('text/calendar'),
+            )->withMime('text/calendar; method=PUBLISH; charset=UTF-8'),
         ];
     }
 
     private function buildHtml(): string
     {
-        $start     = new \DateTimeImmutable($this->slotIso);
+        $tz        = new \DateTimeZone($this->organizerTz ?: 'UTC');
+        $start     = (new \DateTimeImmutable($this->slotIso, new \DateTimeZone('UTC')))->setTimezone($tz);
         $end       = $start->modify("+{$this->duration} minutes");
-        $formatted = $start->format('l, j F Y \a\t g:i A') . ' UTC';
-        $endFmt    = $end->format('g:i A') . ' UTC';
+        $tzAbbr    = $start->format('T');
+        $formatted = $start->format('l, j F Y \a\t g:i A') . ' ' . $tzAbbr;
+        $endFmt    = $end->format('g:i A') . ' ' . $tzAbbr;
         $videoRow  = $this->videoLink
             ? '<tr><td style="padding:8px 0;color:#6b7280;font-size:14px;">Video link</td><td style="padding:8px 0;font-size:14px;"><a href="' . htmlspecialchars($this->videoLink) . '" style="color:#0284c7;">' . htmlspecialchars($this->videoLink) . '</a></td></tr>'
             : '';
@@ -137,12 +140,15 @@ HTML;
             ? "URL:{$this->videoLink}\r\n"
             : '';
 
+        // Quote CN values per RFC 5545 (required when names contain spaces/special chars)
+        $orgCn = $this->icsQuote($this->organizerName);
+
         return implode('', [
             "BEGIN:VCALENDAR\r\n",
             "VERSION:2.0\r\n",
             "PRODID:-//URLCV//Interview Scheduler//EN\r\n",
             "CALSCALE:GREGORIAN\r\n",
-            "METHOD:REQUEST\r\n",
+            "METHOD:PUBLISH\r\n",
             "BEGIN:VEVENT\r\n",
             "UID:{$uid}\r\n",
             "DTSTAMP:{$dtStamp}\r\n",
@@ -152,12 +158,17 @@ HTML;
             "DESCRIPTION:{$description}\r\n",
             $locationLine,
             $urlLine,
-            "ORGANIZER;CN={$this->organizerName}:mailto:{$this->organizerEmail}\r\n",
-            "ATTENDEE;CN={$this->attendeeName};RSVP=TRUE:mailto:{$this->attendeeEmail}\r\n",
+            "ORGANIZER;CN=\"{$orgCn}\":mailto:{$this->organizerEmail}\r\n",
             "STATUS:CONFIRMED\r\n",
             "SEQUENCE:0\r\n",
             "END:VEVENT\r\n",
             "END:VCALENDAR\r\n",
         ]);
+    }
+
+    /** Escape a string for use in a quoted ICS parameter value. */
+    private function icsQuote(string $value): string
+    {
+        return str_replace(['"', '\\'], ['', ''], $value);
     }
 }

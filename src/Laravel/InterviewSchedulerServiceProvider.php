@@ -230,6 +230,7 @@ class InterviewSchedulerServiceProvider extends ServiceProvider
                 $eventTitle     = (string) ($data['title'] ?? 'Meeting');
                 $duration       = (int) ($data['duration'] ?? 30);
                 $videoLink      = (string) ($data['link'] ?? '');
+                $organizerTz    = (string) ($data['tz'] ?? 'UTC');
 
                 if (! filter_var($organizerEmail, FILTER_VALIDATE_EMAIL)) {
                     return response()->json([
@@ -249,6 +250,7 @@ class InterviewSchedulerServiceProvider extends ServiceProvider
                             duration:       $duration,
                             slotIso:        $slotIso,
                             videoLink:      $videoLink,
+                            organizerTz:    $organizerTz,
                         )
                     );
 
@@ -261,6 +263,7 @@ class InterviewSchedulerServiceProvider extends ServiceProvider
                             duration:      $duration,
                             slotIso:       $slotIso,
                             videoLink:     $videoLink,
+                            organizerTz:   $organizerTz,
                         )
                     );
                 } catch (\Throwable $e) {
